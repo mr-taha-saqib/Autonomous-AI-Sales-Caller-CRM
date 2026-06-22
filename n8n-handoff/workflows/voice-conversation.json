@@ -1,0 +1,136 @@
+{
+  "name": "Algorixe — Voice Conversation (gather loop)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "gather",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-gather",
+      "name": "Webhook Gather",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "notes": "Twilio posts SpeechResult here. Query: call_id."
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": "public",
+        "table": "transcripts",
+        "where": { "values": [{ "column": "call_id", "value": "={{ $json.query.call_id }}" }] },
+        "options": {}
+      },
+      "id": "node-pg-get-transcript",
+      "name": "Get Transcript",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Append the customer's utterance and build the Claude messages array.\nconst speech = ($('Webhook Gather').item.json.body.SpeechResult || '').trim();\nconst row = $input.item.json;\nconst turns = Array.isArray(row.turns) ? row.turns : [];\nif (speech) turns.push({ role: 'user', text: speech, ts: Date.now() });\n\n// Build messages; first message MUST be role 'user'.\nlet messages = turns.filter(t => t.text).map(t => ({ role: t.role, content: t.text }));\nwhile (messages.length && messages[0].role === 'assistant') messages.shift();\nif (!messages.length) messages = [{ role: 'user', content: '(call connected — greet the customer)' }];\n\nreturn [{ json: { call_id: $('Webhook Gather').item.json.query.call_id, turns, messages } }];"
+      },
+      "id": "node-code-build",
+      "name": "Append + Build Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"model\": \"claude-opus-4-8\", \"max_tokens\": 1024, \"temperature\": 0.6, \"system\": $env.ALGORIXE_SYSTEM_PROMPT, \"messages\": $json.messages } }}",
+        "options": {}
+      },
+      "id": "node-claude-reply",
+      "name": "Claude Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 300],
+      "notes": "Anthropic header-auth credential. Put SYSTEM_PROMPT+OBJECTION_PLAYBOOK in $env.ALGORIXE_SYSTEM_PROMPT or paste inline."
+    },
+    {
+      "parameters": {
+        "jsCode": "const reply = (($input.item.json.content || []).find(b => b.type === 'text') || {}).text || \"I'm sorry, could you say that again?\";\nconst prev = $('Append + Build Messages').item.json;\nconst turns = prev.turns;\nturns.push({ role: 'assistant', text: reply, ts: Date.now() });\nconst farewell = /(thank you for your time|have a great day|take care|goodbye|we'll be in touch)/i.test(reply);\nreturn [{ json: { call_id: prev.call_id, reply, turns, hangup: farewell } }];"
+      },
+      "id": "node-code-reply",
+      "name": "Extract Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "schema": "public",
+        "table": "transcripts",
+        "columns": "turns",
+        "additionalFields": {}
+      },
+      "id": "node-pg-save-turns",
+      "name": "Persist Turns",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1340, 300],
+      "notes": "UPDATE transcripts SET turns = $json.turns WHERE call_id = $json.call_id"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            { "leftValue": "={{ $('Extract Reply').item.json.hangup }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-if-hangup",
+      "name": "Hangup?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "=<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response><Say voice=\"Polly.Joanna-Neural\">{{ $('Extract Reply').item.json.reply }}</Say><Hangup/></Response>",
+        "options": { "responseCode": 200, "responseHeaders": { "entries": [{ "name": "Content-Type", "value": "text/xml" }] } }
+      },
+      "id": "node-respond-hangup",
+      "name": "Respond Hangup",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1800, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "=<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response><Gather input=\"speech\" action=\"{{ $env.N8N_PUBLIC_URL }}/webhook/gather?call_id={{ $('Extract Reply').item.json.call_id }}\" method=\"POST\" speechTimeout=\"auto\" speechModel=\"phone_call\" language=\"en-US\"><Say voice=\"Polly.Joanna-Neural\">{{ $('Extract Reply').item.json.reply }}</Say></Gather></Response>",
+        "options": { "responseCode": 200, "responseHeaders": { "entries": [{ "name": "Content-Type", "value": "text/xml" }] } }
+      },
+      "id": "node-respond-continue",
+      "name": "Respond Continue",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1800, 400]
+    }
+  ],
+  "connections": {
+    "Webhook Gather": { "main": [[{ "node": "Get Transcript", "type": "main", "index": 0 }]] },
+    "Get Transcript": { "main": [[{ "node": "Append + Build Messages", "type": "main", "index": 0 }]] },
+    "Append + Build Messages": { "main": [[{ "node": "Claude Reply", "type": "main", "index": 0 }]] },
+    "Claude Reply": { "main": [[{ "node": "Extract Reply", "type": "main", "index": 0 }]] },
+    "Extract Reply": { "main": [[{ "node": "Persist Turns", "type": "main", "index": 0 }]] },
+    "Persist Turns": { "main": [[{ "node": "Hangup?", "type": "main", "index": 0 }]] },
+    "Hangup?": { "main": [[{ "node": "Respond Hangup", "type": "main", "index": 0 }], [{ "node": "Respond Continue", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false
+}

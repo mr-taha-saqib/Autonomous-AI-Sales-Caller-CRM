@@ -1,0 +1,154 @@
+{
+  "name": "Algorixe — Call Status Finalize",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "status",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-status",
+      "name": "Webhook Status",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "notes": "Twilio status callback. body: CallStatus, CallDuration. query: call_id."
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "schema": "public",
+        "table": "calls",
+        "columns": "status,duration_seconds",
+        "additionalFields": {}
+      },
+      "id": "node-pg-update-call",
+      "name": "Update Call",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "notes": "Map Twilio CallStatus (completed,no-answer,busy,failed) to our call_status enum."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            { "leftValue": "={{ $('Webhook Status').item.json.body.CallStatus }}", "rightValue": "completed", "operator": { "type": "string", "operation": "equals" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-if-completed",
+      "name": "Is Completed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": "public",
+        "table": "transcripts",
+        "where": { "values": [{ "column": "call_id", "value": "={{ $('Webhook Status').item.json.query.call_id }}" }] },
+        "options": {}
+      },
+      "id": "node-pg-get-transcript",
+      "name": "Get Transcript",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [900, 220]
+    },
+    {
+      "parameters": {
+        "jsCode": "const turns = $input.item.json.turns || [];\nconst text = turns.map(t => (t.role === 'assistant' ? 'Agent: ' : 'Customer: ') + (t.text||'')).join('\\n');\nreturn [{ json: { call_id: $('Webhook Status').item.json.query.call_id, text } }];"
+      },
+      "id": "node-code-render",
+      "name": "Render Transcript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"model\": \"claude-sonnet-4-6\", \"max_tokens\": 512, \"system\": \"You summarise sales calls for a CRM...\", \"tools\": [{ \"name\": \"summarise_call\", \"input_schema\": { \"type\": \"object\", \"properties\": { \"summary\": {\"type\":\"string\"}, \"key_intent\": {\"type\":\"string\"}, \"sentiment\": {\"type\":\"string\"}, \"outcome\": {\"type\":\"string\"} }, \"required\": [\"summary\",\"key_intent\",\"sentiment\",\"outcome\"] } }], \"tool_choice\": { \"type\": \"tool\", \"name\": \"summarise_call\" }, \"messages\": [{ \"role\": \"user\", \"content\": $json.text }] } }}",
+        "options": {}
+      },
+      "id": "node-claude-summary",
+      "name": "Claude Summarise",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1340, 160],
+      "notes": "Read result from content[].input where type==='tool_use'."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"model\": \"claude-sonnet-4-6\", \"max_tokens\": 512, \"system\": \"You are a CRM data-extraction engine...\", \"tools\": [{ \"name\": \"record_lead\", \"input_schema\": { \"type\": \"object\", \"properties\": { \"full_name\": {\"type\":[\"string\",\"null\"]}, \"email\": {\"type\":[\"string\",\"null\"]}, \"location\": {\"type\":[\"string\",\"null\"]}, \"budget\": {\"type\":[\"string\",\"null\"]}, \"vehicle_interest\": {\"type\":[\"string\",\"null\"]}, \"purchase_timeline\": {\"type\":[\"string\",\"null\"]}, \"financing_need\": {\"type\":[\"boolean\",\"null\"]}, \"trade_in_interest\": {\"type\":[\"boolean\",\"null\"]} } } }], \"tool_choice\": { \"type\": \"tool\", \"name\": \"record_lead\" }, \"messages\": [{ \"role\": \"user\", \"content\": $('Render Transcript').item.json.text }] } }}",
+        "options": {}
+      },
+      "id": "node-claude-extract",
+      "name": "Claude Extract",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1340, 320]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pull tool outputs\nconst sum = (($('Claude Summarise').item.json.content||[]).find(b=>b.type==='tool_use')||{}).input||{};\nconst f = (($('Claude Extract').item.json.content||[]).find(b=>b.type==='tool_use')||{}).input||{};\n// Score (port of lead_scoring.py)\nconst TL = {'immediate':35,'1-3 months':25,'3-6 months':12,'researching':4};\nlet s=0; const t=(f.purchase_timeline||'').toLowerCase();\nfor (const k in TL) if (t.includes(k)){ s+=TL[k]; break; }\nif (f.budget) s+=20; if (f.vehicle_interest) s+=15; if (f.email) s+=8;\nif (f.financing_need) s+=7; if (f.trade_in_interest) s+=5;\nif (sum.sentiment==='positive') s+=10; else if (sum.sentiment==='negative') s-=10;\ns=Math.max(0,Math.min(100,s));\nconst temperature = s>=65?'hot':s>=35?'warm':'cold';\nconst conversion_probability = Math.min(0.95, Math.max(0.02, s/110));\nconst statusMap = { appointment_booked:'appointment_set', do_not_call:'do_not_call', qualified:'qualified', needs_followup:'qualified', callback_requested:'qualified', not_interested:'lost' };\nconst status = statusMap[sum.outcome] || 'contacted';\nreturn [{ json: { call_id: $('Render Transcript').item.json.call_id, fields: f, summary: sum, score: s, temperature, conversion_probability, status } }];"
+      },
+      "id": "node-code-score",
+      "name": "Score Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 240]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads SET full_name=COALESCE($1,full_name), email=COALESCE($2,email), location=COALESCE($3,location), budget=COALESCE($4,budget), vehicle_interest=COALESCE($5,vehicle_interest), purchase_timeline=COALESCE($6,purchase_timeline), financing_need=COALESCE($7,financing_need), trade_in_interest=COALESCE($8,trade_in_interest), score=$9, temperature=$10, conversion_probability=$11, sentiment=$12, intent_summary=$13, status=$14 WHERE id = (SELECT lead_id FROM calls WHERE id = $15);",
+        "options": {}
+      },
+      "id": "node-pg-upsert-lead",
+      "name": "Upsert Lead",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1780, 240],
+      "notes": "Bind params $1..$15 from Score Lead output (fields.*, score, temperature, conversion_probability, summary.sentiment, summary.key_intent, status, call_id)."
+    },
+    {
+      "parameters": {
+        "respondWith": "noData",
+        "options": { "responseCode": 204 }
+      },
+      "id": "node-respond-204",
+      "name": "Respond 204",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2000, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Status": { "main": [[{ "node": "Update Call", "type": "main", "index": 0 }]] },
+    "Update Call": { "main": [[{ "node": "Is Completed?", "type": "main", "index": 0 }]] },
+    "Is Completed?": { "main": [[{ "node": "Get Transcript", "type": "main", "index": 0 }], [{ "node": "Respond 204", "type": "main", "index": 0 }]] },
+    "Get Transcript": { "main": [[{ "node": "Render Transcript", "type": "main", "index": 0 }]] },
+    "Render Transcript": { "main": [[{ "node": "Claude Summarise", "type": "main", "index": 0 }, { "node": "Claude Extract", "type": "main", "index": 0 }]] },
+    "Claude Summarise": { "main": [[{ "node": "Score Lead", "type": "main", "index": 0 }]] },
+    "Claude Extract": { "main": [[{ "node": "Score Lead", "type": "main", "index": 0 }]] },
+    "Score Lead": { "main": [[{ "node": "Upsert Lead", "type": "main", "index": 0 }]] },
+    "Upsert Lead": { "main": [[{ "node": "Respond 204", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false
+}

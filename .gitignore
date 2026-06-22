@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+npm-debug.log*
+yarn-error.log*
+
+# Env / secrets
+.env
+.env.*
+!config/.env.example
+*.pem
+*.key
+
+# Docker / data
+postgres_data/
+backups/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Verification / build artifacts (generated locally, not source)
+*.flag
+*_out.txt
+pytest_out.txt
+installed_versions.txt
+alembic_sql.txt
+file_inventory.txt
+install*.log
+ps_install.log
+pip_install.log
+build_only.log
+compose_*.log
+*.zip

@@ -1,0 +1,96 @@
+{
+  "name": "Algorixe — Outbound Initiate",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "initiate-call",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-initiate",
+      "name": "Webhook Initiate",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "notes": "POST { to_number, lead_id }"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": "public",
+        "table": "calls",
+        "columns": "direction,status,from_number,to_number,lead_id",
+        "additionalFields": {}
+      },
+      "id": "node-pg-insert-call",
+      "name": "Insert Call Row",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "notes": "direction='outbound', status='queued', from_number=CALLER_ID, to_number, lead_id. Return id."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.twilio.com/2010-04-01/Accounts/{{ $env.TWILIO_ACCOUNT_SID }}/Calls.json",
+        "authentication": "predefinedCredentialType",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            { "name": "To", "value": "={{ $('Webhook Initiate').item.json.body.to_number }}" },
+            { "name": "From", "value": "={{ $env.TWILIO_CALLER_ID }}" },
+            { "name": "Url", "value": "={{ $env.N8N_PUBLIC_URL }}/webhook/voice?call_id={{ $json.id }}" },
+            { "name": "StatusCallback", "value": "={{ $env.N8N_PUBLIC_URL }}/webhook/status?call_id={{ $json.id }}" },
+            { "name": "StatusCallbackEvent", "value": "completed" },
+            { "name": "Record", "value": "true" },
+            { "name": "MachineDetection", "value": "DetectMessageEnd" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-twilio-call",
+      "name": "Create Twilio Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [720, 300],
+      "notes": "Use Twilio Basic Auth credential (SID:AuthToken)."
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "schema": "public",
+        "table": "calls",
+        "columns": "twilio_sid,status",
+        "additionalFields": {}
+      },
+      "id": "node-pg-update-sid",
+      "name": "Save SID",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [960, 300],
+      "notes": "set twilio_sid=$json.sid, status='initiated' WHERE id = call_id"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"call_id\": $('Insert Call Row').item.json.id, \"sid\": $json.sid } }}",
+        "options": {}
+      },
+      "id": "node-respond-initiate",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1200, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Initiate": { "main": [[{ "node": "Insert Call Row", "type": "main", "index": 0 }]] },
+    "Insert Call Row": { "main": [[{ "node": "Create Twilio Call", "type": "main", "index": 0 }]] },
+    "Create Twilio Call": { "main": [[{ "node": "Save SID", "type": "main", "index": 0 }]] },
+    "Save SID": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "active": false
+}

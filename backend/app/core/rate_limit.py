@@ -1,0 +1,12 @@
+"""API rate limiting via slowapi (in-memory; swap to Redis in production)."""
+from __future__ import annotations
+
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+from app.core.config import settings
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=[f"{settings.RATE_LIMIT_PER_MINUTE}/minute"],
+)
