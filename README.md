@@ -1,5 +1,10 @@
 # Algorixe Car Care — AI Cold-Calling & Sales Platform
 
+[![CI](https://github.com/mr-taha-saqib/Autonomous-AI-Sales-Caller-CRM/actions/workflows/ci.yml/badge.svg)](https://github.com/mr-taha-saqib/Autonomous-AI-Sales-Caller-CRM/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11-3776AB?logo=python&logoColor=white)
+![Next.js](https://img.shields.io/badge/Next.js-14-000000?logo=nextdotjs&logoColor=white)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+
 A production-grade, AI-powered outbound/inbound cold-calling platform for **Algorixe Car Care**.
 The **Algorixe Sales Assistant** makes natural phone calls (Twilio Voice), qualifies leads,
 handles objections, books appointments, and writes everything back to a built-in CRM — powered
@@ -49,7 +54,7 @@ by the **Claude API**.
 ## Quick Start (Local, Docker)
 
 ```bash
-git clone <repo> algorixe-call-agent && cd algorixe-call-agent
+git clone https://github.com/mr-taha-saqib/Autonomous-AI-Sales-Caller-CRM.git && cd Autonomous-AI-Sales-Caller-CRM
 cp config/.env.example .env          # fill in TWILIO_* and ANTHROPIC_API_KEY
 docker compose up --build            # api:8000, web:3000, db:5432
 docker compose exec api alembic upgrade head
@@ -64,6 +69,16 @@ password: ChangeMe!123
 ```
 
 API docs (OpenAPI/Swagger): **http://localhost:8000/docs**
+
+## Tests
+
+```bash
+cd backend && pip install -r requirements.txt pytest && pytest   # 27 tests, in-memory SQLite
+cd frontend && npm ci && npm run lint && npm run typecheck        # ESLint + TypeScript
+```
+
+The backend suite covers auth and RBAC, the leads, calls, appointments and analytics APIs, lead
+scoring, and the conversation engine. CI runs both halves on every push.
 
 ## Documentation
 
