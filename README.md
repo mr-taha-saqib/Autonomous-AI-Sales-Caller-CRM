@@ -22,6 +22,14 @@ by the **Claude API**.
                                        └───────────────┘       └──────────────┘
 ```
 
+## Screenshots
+
+![Dashboard: lead totals, sales funnel, lead temperature, hottest leads and recent calls](docs/screenshots/dashboard.png)
+
+![Lead management: AI lead scores, status and one-click calling](docs/screenshots/leads.png)
+
+*Running locally with the bundled demo data (`python -m app.cli seed`).*
+
 ## Tech Stack
 
 | Layer            | Technology                                  |
